@@ -1,30 +1,46 @@
 #include "Keyboard.h"
-#include "Il2cpp/Il2cpp.h"
-#include "string"
+#include "../Unity/Il2Cpp.h"
+#include <string>
+
+extern uintptr_t il2cpp;
+extern MonoString* (*String_CreateString)(void* instance, const char* value, int startIndex, int length);
 
 namespace Keyboard
 {
-    Il2CppClass *TouchScreenKeyboard = nullptr;
-    Il2CppObject *openedKeyboard = nullptr;
+    void* openedKeyboard = nullptr;
     std::function<void(const std::string &)> lastCallback = nullptr;
     std::string lastText = "";
     bool callbackOnDoneOnly = false;
 
+    typedef void* (*OpenFunc)(MonoString*, int, bool, bool, bool, bool, MonoString*, int);
+    typedef MonoString* (*GetTextFunc)(void*);
+    typedef int (*GetStatusFunc)(void*);
+    typedef void (*DestroyFunc)(void*);
+
+    static OpenFunc OpenMethod = nullptr;
+    static GetTextFunc GetTextMethod = nullptr;
+    static GetStatusFunc GetStatusMethod = nullptr;
+    static DestroyFunc DestroyMethod = nullptr;
+
     void Init()
     {
-        TouchScreenKeyboard = Il2cpp::FindClass("UnityEngine.TouchScreenKeyboard");
-        LOGPTR(TouchScreenKeyboard);
+        OpenMethod = (OpenFunc)AOV_METHOD("UnityEngine.CoreModule.dll", "UnityEngine", "TouchScreenKeyboard", "Open", 8);
+        GetTextMethod = (GetTextFunc)AOV_METHOD("UnityEngine.CoreModule.dll", "UnityEngine", "TouchScreenKeyboard", "get_text", 0);
+        GetStatusMethod = (GetStatusFunc)AOV_METHOD("UnityEngine.CoreModule.dll", "UnityEngine", "TouchScreenKeyboard", "get_status", 0);
+        DestroyMethod = (DestroyFunc)AOV_METHOD("UnityEngine.CoreModule.dll", "UnityEngine", "TouchScreenKeyboard", "Destroy", 0);
     }
 
     void Open(const std::function<void(const std::string &)> &callback, bool onDoneOnly)
     {
         Open("", callback, onDoneOnly);
     }
+
     void Open(const char *text, const std::function<void(const std::string &)> &callback, bool onDoneOnly)
     {
-        LOGD("Keyboard Open");
-        openedKeyboard = TouchScreenKeyboard->invoke_static_method<Il2CppObject *>("Open", Il2cpp::NewString(text), 0,
-                                                                                   0, 0, 0, Il2cpp::NewString(""), 0);
+        if (!OpenMethod || !String_CreateString) return;
+        MonoString* textStr = String_CreateString(nullptr, text, 0, strlen(text));
+        MonoString* emptyStr = String_CreateString(nullptr, "", 0, 0);
+        openedKeyboard = OpenMethod(textStr, 0, false, false, false, false, emptyStr, 0);
         lastCallback = callback;
         lastText = text;
         callbackOnDoneOnly = onDoneOnly;
@@ -32,85 +48,51 @@ namespace Keyboard
 
     void Reset()
     {
+        if (openedKeyboard && DestroyMethod) {
+            DestroyMethod(openedKeyboard);
+        }
+        openedKeyboard = nullptr;
         lastCallback = nullptr;
         lastText = "";
         callbackOnDoneOnly = false;
-
-        static auto Destroy = openedKeyboard->klass->getMethod("Destroy");
-        static auto Finalize = openedKeyboard->klass->getMethod("Finalize");
-        if (Destroy)
-        {
-            Destroy->invoke_static<void>(openedKeyboard);
-        }
-        if (Finalize)
-        {
-            Finalize->invoke_static<void>(openedKeyboard);
-        }
-        openedKeyboard = nullptr;
     }
 
     void Update()
     {
-        if (openedKeyboard)
+        if (!openedKeyboard || !GetStatusMethod)
+            return;
+
+        int status = GetStatusMethod(openedKeyboard);
+
+        if (status == 0 || status == 1)
         {
-            static auto get_statusMethod = TouchScreenKeyboard->getMethod("get_status");
-            TouchScreenKeyboardStatus status = Canceled;
-            if (check)
+            if (GetTextMethod)
             {
-                status = openedKeyboard->invoke_method<TouchScreenKeyboardStatus>("get_status");
-            }
-            else
-            {
-                auto result = Il2cpp::RuntimeInvoke(get_statusMethod, openedKeyboard, nullptr, nullptr);
-                if (!result)
+                MonoString* textStr = GetTextMethod(openedKeyboard);
+                if (textStr)
                 {
-                    return Reset();
-                }
-                status = Il2cpp::GetUnboxedValue<TouchScreenKeyboardStatus>(result);
-            }
-
-            if (status == Visible || status == Done)
-            {
-                static auto get_textMethod = TouchScreenKeyboard->getMethod("get_text");
-                static auto get_text =
-                    (Il2CppString * (*)(void *, MethodInfo *, Il2CppObject *, void *)) get_textMethod->invoker_method;
-                Il2CppString *text = nullptr;
-                if (check)
-                {
-                    text = openedKeyboard->invoke_method<Il2CppString *>("get_text");
-                }
-                else
-                {
-                    text = get_text(get_textMethod->methodPointer, get_textMethod, openedKeyboard, nullptr);
-                }
-
-                if (!text)
-                {
-                    return;
-                }
-
-                auto currentText = text->to_string();
-                if (lastCallback && currentText != lastText && !callbackOnDoneOnly)
-                {
-                    lastText = currentText;
-                    lastCallback(currentText);
-                }
-
-                if (status == Done)
-                {
-                    if (lastCallback && callbackOnDoneOnly)
+                    std::string currentText = textStr->toString();
+                    if (lastCallback && currentText != lastText && !callbackOnDoneOnly)
                     {
+                        lastText = currentText;
                         lastCallback(currentText);
                     }
-                    Reset();
-                    LOGD("Keyboard Done");
+
+                    if (status == 1)
+                    {
+                        if (lastCallback && callbackOnDoneOnly)
+                        {
+                            lastCallback(currentText);
+                        }
+                        Reset();
+                    }
+                    return;
                 }
             }
-            else
-            {
-                Reset();
-                LOGD("Keyboard Canceled");
-            }
+        }
+        else
+        {
+            Reset();
         }
     }
 
